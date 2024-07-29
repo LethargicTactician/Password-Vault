@@ -2,11 +2,13 @@ import json
 import re
 import sqlite3
 import hashlib
-import random, string, base64
+import random
+import string
+import base64
 from flask import Flask, jsonify, request, g
-from Crypto.Cipher import AES # type: ignore
-from Crypto.Protocol.KDF import PBKDF2 # type: ignore
-from Crypto.Util.Padding import pad, unpad # type: ignore
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
 
 app = Flask(__name__)
 
@@ -65,8 +67,9 @@ def generate_salt(length=16):
     characters = string.ascii_letters + string.digits + string.punctuation
     return ''.join(random.choice(characters) for i in range(length))
 
-# Encrypt password with AES
 def encrypt_password(master_password, password):
+    if master_password is None or password is None:
+        return None  # Handle this scenario appropriately
     salt = generate_salt().encode()
     key = PBKDF2(master_password, salt, dkLen=32)
     cipher = AES.new(key, AES.MODE_CBC)
@@ -75,8 +78,9 @@ def encrypt_password(master_password, password):
     ct = base64.b64encode(ct_bytes).decode('utf-8')
     return json.dumps({'iv': iv, 'ciphertext': ct, 'salt': base64.b64encode(salt).decode('utf-8')})
 
-# Decrypt password with AES
 def decrypt_password(master_password, json_input):
+    if master_password is None or json_input is None:
+        return None  # Handle this scenario appropriately
     try:
         b64 = json.loads(json_input)
         iv = base64.b64decode(b64['iv'])
@@ -86,7 +90,7 @@ def decrypt_password(master_password, json_input):
         cipher = AES.new(key, AES.MODE_CBC, iv)
         pt = unpad(cipher.decrypt(ct), AES.block_size)
         return pt.decode('utf-8')
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, TypeError):
         return None
 
 # ROUTES
@@ -98,28 +102,32 @@ def default_route():
 def create_user():
     try:
         user_data = request.json
+        print(f"Received data: {user_data}")  # Debugging line
         name = user_data.get('name')
         email = user_data.get('email')
-        master_password = user_data.get('password')
+        password = user_data.get('password')
 
-        # Password complexity check
-        password_requirements = check_password_complexity(master_password)
+        if not all([name, email, password]):
+            return jsonify({'message': 'Missing required fields'}), 400
+
+        password_requirements = check_password_complexity(password)
         if not password_requirements.startswith("Strong"):
             return jsonify({'message': password_requirements}), 400
 
         db = get_db()
         cursor = db.cursor()
 
-        # Check if email exists
         cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
         existing_user = cursor.fetchone()
 
         if existing_user:
             return jsonify({"message": "Email already exists"}), 400
 
-        # Store encrypted master password
         salt = generate_salt()
-        encrypted_master_password = encrypt_password(master_password, master_password)
+        encrypted_master_password = encrypt_password(password, password)
+
+        if encrypted_master_password is None:
+            return jsonify({'message': 'Error encrypting password'}), 500
 
         cursor.execute(
             "INSERT INTO users (name, email, master_password, salt) VALUES (?, ?, ?, ?)",
